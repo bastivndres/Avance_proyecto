@@ -1,0 +1,681 @@
+---
+title: "entrega_final"
+format: pdf
+editor: visual
+---
+
+# Segunda parte proyecto
+
+```{r,results='hide', warning=FALSE,message=FALSE}
+library(tidyverse)
+library(caret)
+library(ggplot2)
+library(e1071)
+library(DataExplorer)
+library(pROC)
+library(caTools)
+library(MASS)
+library(class)
+library(rpart)
+library(readr)
+library(factoextra)
+library(rsample)
+library(modelr)
+library(broom)
+
+```
+
+```{r}
+library(readr)
+df <- read_csv("C:/Users/Asus/OneDrive/Escritorio/Analisis de negocios/garments_worker_productivity.csv")
+
+```
+
+```{r}
+set.seed(1)
+```
+
+## EDA
+
+```{r}
+glimpse(df)
+```
+
+```{r}
+df$department<-as.factor(df$department)
+df$team<-as.factor(df$team)
+df$actual_productivity<-as.numeric(df$actual_productivity)
+```
+
+```{r}
+df<-df %>% dplyr:: select (-date)
+df<-df %>% dplyr:: select (-quarter)
+df<-df %>% dplyr:: select (-day)
+
+```
+
+```{r,fig.width=7,fig.height=3}
+plot_intro(df)
+```
+
+```{r}
+# Valores perdidos
+df <- df[complete.cases(df),]
+```
+
+```{r}
+plot_intro(df)
+```
+
+```{r}
+split <- initial_split(df, prop = 0.8)
+df_train <- training(split)
+df_test <- testing(split)
+```
+
+```{r}
+plot_correlation(df)
+```
+
+```{r}
+variables_numericas<-df[,sapply(df,is.numeric)] #selecciona las columnas numericas
+matriz_correlacion <- cor(variables_numericas, as.numeric(df$actual_productivity))
+matriz_correlacion
+```
+
+```{r}
+boxplot(df$wip,ylab="WIP")
+boxplot(df$incentive,ylab="Incentivo financiero")
+boxplot(df$smv,ylab="Tiempo asignado para una tarea")
+boxplot(df$targeted_productivity,ylab="Productividad objetivo para cada día")
+boxplot(df$idle_time,ylab="tiempo en que la producción fue interrumpida")
+
+```
+
+```{r}
+for (i in c("incentive", "targeted_productivity"))
+{
+outliers <- boxplot.stats(df[[i]])$out
+df[[i]][df[[i]] %in% outliers] <- NA
+}
+```
+
+```{r}
+boxplot(df$incentive,ylab="Incentivo financiero")
+boxplot(df$targeted_productivity,ylab="Productividad objetivo para cada día")
+```
+
+# Métodos supervisados
+
+## 1. Modelo Regresión Múltiple
+
+```{r}
+lm.fit<-lm(actual_productivity ~ targeted_productivity + smv + wip + over_time + incentive + idle_time + idle_men + no_of_style_change + no_of_workers, data=df)
+summary(lm.fit)
+```
+
+```{r}
+lm.fit2<-lm(actual_productivity ~ targeted_productivity + smv + over_time + incentive + idle_time + idle_men + no_of_workers, data=df)
+summary(lm.fit2)
+```
+
+```{r}
+confint(lm.fit2)
+```
+
+```{r}
+ggplot(df, aes(incentive, actual_productivity)) +
+geom_point() +
+geom_smooth(method = "lm") +
+geom_smooth(se = FALSE, color = "red")
+
+```
+
+```{r}
+ggplot(lm.fit2, aes(.fitted, .resid)) +
+geom_ref_line(h = 0) +
+geom_point() +
+geom_smooth(se = FALSE) +
+ggtitle("Residuos vs Ajuste")
+
+```
+
+```{r}
+modelo_1_res <- augment(lm.fit2, df)
+p4 <- ggplot(modelo_1_res, aes(.fitted, .std.resid)) +
+geom_ref_line(h = 0) +
+geom_point() +
+geom_smooth(se = FALSE) +
+ggtitle("Residuos Estadarizados vs Ajuste")
+p5 <- ggplot(modelo_1_res, aes(.fitted, sqrt(.std.resid))) +
+geom_ref_line(h = 0) +
+geom_point() +
+geom_smooth(se = FALSE) +
+ggtitle("Reescalamiento")
+gridExtra::grid.arrange(p4, p5, nrow = 1)
+```
+
+```{r}
+qq_plot <- qqnorm(modelo_1_res$.resid)
+qq_plot <- qqline(modelo_1_res$.resid)
+
+```
+
+```{r}
+par(mfrow=c(1, 2))
+plot(lm.fit2, which = 4, id.n = 5)
+plot(lm.fit2, which = 5, id.n = 5)
+```
+
+```{r}
+predicted_values <- predict(lm.fit2)
+mse <- mean((predicted_values - df$actual_productivity)^2)
+print(mse)
+rmse <- sqrt(mse)
+print(rmse)
+```
+
+## 2. KNN
+
+```{r}
+train_knn = df_train %>% dplyr::select(-c("department","team"))
+test_knn = df_test %>% dplyr::select(-c("department","team"))
+```
+
+```{r}
+# Eliminar filas con valores faltantes en train_knn y test_knn
+train_knn <- train_knn[complete.cases(train_knn), ]
+test_knn <- test_knn[complete.cases(test_knn), ]
+
+# Ajustar el modelo KNN
+knn_model <- knn(train_knn[, -ncol(train_knn)], test_knn[, -ncol(test_knn)], train_knn$actual_productivity, k = 1)
+
+# Realizar predicciones en el conjunto de prueba
+predictions <- knn_model
+
+# Calcular el RMSE
+rmse <- sqrt(mean((predictions - test_knn$actual_productivity)^2))
+print(rmse)
+```
+
+```{r}
+# Convertir los datos en factores con los mismos niveles
+df_train$actual_productivity <- factor(df_train$actual_productivity, levels = unique(df_train$actual_productivity))
+df_test$actual_productivity <- factor(df_test$actual_productivity, levels = unique(df_train$actual_productivity))
+
+# Inicializar vector para almacenar la precisión global
+overall.accuracy <- c()
+
+# Iterar sobre diferentes valores de k
+for (i in 1:15) {
+  set.seed(1)
+  
+  # Ajustar el modelo KNN
+  knn_pred <- knn(train_knn, test_knn, df_train$actual_productivity, k = i)
+  
+  # Convertir las predicciones en factores con los mismos niveles
+  knn_pred <- factor(knn_pred, levels = levels(df_train$actual_productivity))
+  
+  # Calcular la matriz de confusión
+  confusion <- confusionMatrix(knn_pred, df_test$actual_productivity)
+  
+  # Obtener la precisión global
+  overall <- confusion$overall['Accuracy']
+  
+  # Almacenar la precisión global en el vector
+  overall.accuracy <- c(overall.accuracy, overall)
+}
+
+# Crear un dataframe con los resultados
+acc <- data.frame(k = 1:15, accuracy = overall.accuracy)
+
+# Graficar la precisión global en función de k
+ggplot(acc) +
+  aes(x = k, y = accuracy) +
+  geom_line(size = 0.5, colour = "#112446") +
+  theme_minimal() +
+  geom_vline(xintercept = 1, color = "red")
+
+```
+
+## 3. Árbol de decisión
+
+```{r}
+tree.fit = rpart(formula=actual_productivity~ . , data=df_train)
+plot(tree.fit)
+text(tree.fit, pretty=10)
+```
+
+```{r}
+# Ajustar el árbol de decisión
+tree.fit <- rpart(formula = actual_productivity ~ ., data = df_train)
+
+# Realizar predicciones en el conjunto de prueba
+predictions <- predict(tree.fit, newdata = df_test)
+
+# Calcular el RMSE
+rmse <- sqrt(mean((predictions - df_test$actual_productivity)^2))
+mse <- rmse^2
+print(mse)
+print(rmse)
+```
+
+## 4. SVM
+
+```{r}
+df_train_svm<-df_train %>% dplyr:: select (-team,-department)
+df_test_svm<-df_test %>% dplyr:: select (-team,-department)
+```
+
+```{r}
+df_train_svm[-10]=scale(df_train_svm[-10])
+df_test_svm[-10]=scale(df_test_svm[-10])
+```
+
+```{r}
+svm_fit <- svm(formula = actual_productivity ~ ., data = df_train_svm, kernel = 'linear')
+
+summary(svm_fit)
+
+#
+```
+
+```{r}
+# Realizar predicciones en el conjunto de prueba
+predictions <- predict(svm_fit, newdata = df_test)
+
+# Calcular el MSE
+mse <- mean((predictions - df_test$actual_productivity)^2)
+rmse=(sqrt(mse))
+print(mse)
+print(rmse)
+```
+
+```{r}
+svm_fit2 <- svm(formula = actual_productivity ~ ., data = df_train_svm, kernel = 'radial')
+
+summary(svm_fit2)
+
+#plot(svm_fit2, df_train_svm)
+```
+
+```{r}
+# Realizar predicciones en el conjunto de prueba
+predictions <- predict(svm_fit2, newdata = df_test)
+
+# Calcular el MSE
+mse <- mean((predictions - df_test$actual_productivity)^2)
+rmse=(sqrt(mse))
+print(mse)
+print(rmse)
+```
+
+# Métodos no supervisados
+
+## 7. Análisis de componentes principales
+
+```{r}
+variables_numericas_train<-df_train[,sapply(df_train,is.numeric)] #selecciona las columnas numericas
+variables_numericas_test<-df_test[,sapply(df_test,is.numeric)]
+```
+
+```{r}
+variables_numericas_train<-variables_numericas_train %>% dplyr:: select (-actual_productivity)
+variables_numericas_test<-variables_numericas_test %>% dplyr:: select (-actual_productivity)
+```
+
+```{r}
+pca <- prcomp(variables_numericas_train, scale = TRUE)
+
+```
+
+```{r}
+#Varianza explicada por componente ----
+prop_varianza <- pca$sdev^2 / sum(pca$sdev^2)
+
+pca_var<-ggplot(data = data.frame(prop_varianza, pc = 1:length(prop_varianza)), aes(x = pc, y = prop_varianza)) + 
+  geom_col(width = 0.3) +  scale_y_continuous(limits = c(0,1)) +  theme_bw() +
+  labs(x = "Componente principal", y = "Prop. de varianza explicada")
+pca_var
+
+#Varianza explicada acumulada ----
+prop_varianza_acum <- cumsum(prop_varianza)
+
+pca_var_acum<-ggplot(data = data.frame(prop_varianza_acum, pc = 1:length(prop_varianza)), aes(x = pc, y = prop_varianza_acum, group = 1)) +
+  geom_point() +  geom_line() +  theme_bw() +  labs(x = "Componente principal", y = "Prop. varianza explicada acumulada")
+
+pca_var_acum
+
+biplot(pca)
+```
+
+```{r}
+library(factoextra)
+
+fviz_eig(pca)
+
+fviz_pca_biplot(pca, repel = TRUE,
+                col.var = "#D2691E", # color para las variables
+                col.ind = "#000000"  # colores de las estaciones
+)
+```
+
+```{r}
+library(corrplot)
+var <- get_pca_var(pca)
+corrplot(var$cos2, is.corr = FALSE)
+
+
+plot_prcomp(variables_numericas_train)
+```
+
+## 8. K-Means
+
+## 
+
+```{r}
+df_kmeans=scale(variables_numericas_train)
+```
+
+```{r}
+k2 <- kmeans(df_kmeans, centers = 2, nstart = 25)
+k3 <- kmeans(df_kmeans, centers = 3, nstart = 25)
+k4 <- kmeans(df_kmeans, centers = 4, nstart = 25)
+k5 <- kmeans(df_kmeans, centers = 5, nstart = 25)
+
+# plots to compare
+p1 <- fviz_cluster(k2, geom = "point", data = df_kmeans) + ggtitle("k = 2")
+p2 <- fviz_cluster(k3, geom = "point",  data = df_kmeans) + ggtitle("k = 3")
+p3 <- fviz_cluster(k4, geom = "point",  data = df_kmeans) + ggtitle("k = 4")
+p4 <- fviz_cluster(k5, geom = "point",  data = df_kmeans) + ggtitle("k = 5")
+
+library(gridExtra)
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+
+```
+
+```{r}
+# Optimal K
+
+fviz_nbclust(df_kmeans, kmeans, method = "silhouette", k.max = 10)
+
+```
+
+```{r}
+fviz_nbclust(df_kmeans, kmeans, method = "wss", k.max = 10)
+```
+
+```{r}
+fviz_nbclust(df_kmeans, kmeans, "gap_stat", k.max = 10)
+```
+
+```{r}
+fviz_eig(prcomp(df_kmeans, scale = T))
+```
+
+## 9. Agrupamiento jerárquico
+
+```{r}
+## Method 1
+# Dissimilarity matrix
+d <- dist(df_kmeans, method = "euclidean")
+
+# Hierarchical clustering using Complete Linkage
+hc1 <- hclust(d, method = "complete" )
+
+# Plot the obtained dendrogram
+plot(hc1, cex = 0.6, hang = -1)
+```
+
+```{r}
+# Prunning
+
+# Ward's method
+hc5 <- hclust(d, method = "ward.D2" )
+
+# Cut tree into 4 groups
+sub_grp <- cutree(hc5, k = 2)
+
+# Number of members in each cluster
+table(sub_grp)
+
+#df_kmeans %>%
+  #mutate(cluster = sub_grp) %>%
+  #head
+
+plot(hc5, cex = 0.6)
+rect.hclust(hc5, k = 3, border = 2:5)
+```
+
+```{r}
+fviz_nbclust(df_kmeans, FUN = hcut, method = "wss")
+```
+
+```{r}
+
+fviz_nbclust(df_kmeans, FUN = hcut, method = "silhouette")
+```
+
+```{r}
+library(cluster)
+gap_stat <- clusGap(df_kmeans, FUN = hcut, nstart = 25, K.max = 10, B = 50)
+fviz_gap_stat(gap_stat)
+```
+
+## 10. Redes neuronales
+
+```{r}
+library(e1071)
+library(readr)
+library(tidyverse)
+library(DataExplorer)
+library(rsample)
+library(parsnip)
+library(recipes)
+library(workflows)
+library(yardstick)
+library(caret)
+library(tensorflow)
+library(keras)
+library(reticulate)
+library(nnet)
+
+```
+
+```{r}
+library(neuralnet)
+set.seed(1)
+concrete_model <- neuralnet(actual_productivity ~  targeted_productivity + smv + wip + over_time + incentive + idle_time + idle_men + no_of_style_change + no_of_workers,
+data = df_train)
+plot(concrete_model, rep="best")
+```
+
+```{r}
+predicted_output <- compute(concrete_model, df_test[, c("targeted_productivity", "smv", "wip", "over_time", "incentive", "idle_time", "idle_men", "no_of_style_change", "no_of_workers")])
+predicted_values <- predicted_output$net.result
+
+actual_values <- df_test$actual_productivity
+
+# Cálculo del MSE
+mse <- mean((actual_values - predicted_values)^2)
+
+# Cálculo del RMSE
+rmse <- sqrt(mse)
+
+mse
+rmse
+```
+
+```{r}
+# Lineal regression
+
+lm_mod <- linear_reg() %>% 
+  set_engine("lm")
+
+credit_recipe <- recipe(actual_productivity ~ ., data = df_train) %>% 
+  step_dummy(all_factor_predictors())
+
+log_wflow <- workflow() %>% 
+  add_model(lm_mod) %>% 
+  add_recipe(credit_recipe)
+
+credit_fit <- log_wflow %>% 
+  fit(data = df_train)
+
+credit_fit %>% extract_fit_parsnip() %>% tidy()
+
+predictions<- credit_fit %>%
+  predict( new_data =  df_test)
+
+#predictions_class<- credit_fit %>%
+  #predict( new_data =  df_test, type = "class")
+
+#predictions_prob <- credit_fit %>%
+  #predict( new_data =  df_test, type = "prob")
+
+#credits_res <- df_test %>% 
+   #subset(select = actual_productivity) %>% 
+  #bind_cols(predictions_class, predictions_prob)
+credits_res <- df_test %>% 
+  bind_cols(predictions)
+```
+
+```{r}
+
+```
+
+```{r}
+set.seed(1)
+nnet_mod <-
+  mlp(
+    hidden_units = 2,
+    epochs = 2,
+    penalty = 0.2
+  ) %>%
+  set_mode("regression") %>% 
+  set_engine("nnet", verbose = 0) 
+```
+
+```{r}
+nnet_wflow <-
+  workflow() %>%
+  add_recipe(credit_recipe) %>% 
+  add_model(nnet_mod)  
+```
+
+```{r}
+nnet_fit <- nnet_wflow %>% 
+  fit( data = df_train)
+```
+
+```{r}
+nnet_res <- df_test %>% 
+  subset(select = actual_productivity) %>% 
+  bind_cols(nnet_fit %>% predict(new_data = df_test))
+```
+
+```{r}
+mse <- mean((nnet_res$actual_productivity - nnet_res$.pred)^2)
+print (mse)
+
+```
+
+```{r}
+lm_model <- lm(actual_productivity ~ .pred, data = nnet_res)
+r_squared <- summary(lm_model)$r.squared
+print(r_squared)
+```
+
+```{r}
+
+library(ggplot2)
+ggplot(nnet_res, aes(x = actual_productivity, y = .pred)) +
+  geom_point() +
+  geom_abline(color = "red") +
+  labs(x = "Valor Real", y = "Valor Predicho") +
+  ggtitle("Valores Predichos vs. Valores Reales")
+```
+
+```{r}
+
+```
+
+## 11. Redes neuronales convolucionales
+
+```{r}
+library(reticulate)
+
+library(tensorflow)
+#use_python(python = 'C:/Python/Python310/')
+use_condaenv("r-reticulate")
+#install_tensorflow(envname = "r-reticulate")
+#install_keras(envname = "r-reticulate")
+tf$constant("Hello Tensorflow!")
+```
+
+```{r}
+library(data.table)
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(keras)
+```
+
+```{r}
+max_features <- 5000
+maxlen <- 400
+batch_size <- 32
+embedding_dims <- 50
+filters <- 250
+kernel_size <- 3
+hidden_dims <- 250
+epochs <- 10
+```
+
+```{r}
+#model <- keras_model_sequential()
+
+#model %>% 
+  #layer_embedding(max_features, embedding_dims, input_length = maxlen) %>%
+  #layer_dropout(0.2) %>%
+  
+#model %>%
+#layer_dense(units = 64, activation = "relu", input_shape = c(10)) %>%
+#layer_dropout(rate = 0.2) %>%
+#layer_dense(units = 32, activation = "relu") %>%
+#layer_batch_normalization() %>%
+#layer_dense(units = 1, activation = "sigmoid")  
+
+# Compile model
+#model %>% compile(
+#loss = "binary_crossentropy",
+#optimizer = "adam",
+#metrics = c("accuracy")
+#)
+```
+
+```{r}
+# Data Preparation --------------------------------------------------------
+
+
+#imdb <- dataset_imdb(num_words = max_features)
+
+#x_train <- imdb$train$x %>%
+  #pad_sequences(maxlen = maxlen)
+#x_test <- imdb$test$x %>%
+  #pad_sequences(maxlen = maxlen)
+```
+
+```{r}
+# Training ----------------------------------------------------------------
+
+#history <- model %>%
+  #fit(
+    #df_train, imdb$train$y,
+    #batch_size = batch_size,
+    #epochs = epochs,
+    #validation_data = list(df_test, imdb$test$y)
+  #)
+
+#res <- model %>% evaluate (df_test, imdb$test$y)
+```

@@ -1,0 +1,658 @@
+---
+title: "Proyecto"
+format: pdf
+editor: visual
+---
+
+## Primera parte proyecto
+
+```{r,results='hide', warning=FALSE,message=FALSE}
+library(tidyverse)
+library(caret)
+library(ggplot2)
+library(e1071)
+library(DataExplorer)
+library(pROC)
+library(caTools)
+library(MASS)
+library(class)
+library(rpart)
+library(readr)
+library(factoextra)
+```
+
+```{r}
+df_train<-read.csv("C:/Users/Asus/OneDrive/Escritorio/Analisis de negocios/test.csv")
+df_test<-read.csv("C:/Users/Asus/OneDrive/Escritorio/Analisis de negocios/train.csv")
+```
+
+```{r}
+set.seed(1)
+```
+
+### EDA
+
+```{r}
+glimpse(df_train)
+```
+
+```{r}
+df_train$Gender<-as.factor(df_train$Gender)
+df_test$Gender<-as.factor(df_test$Gender)
+
+df_train$Customer.Type<-as.factor(df_train$Customer.Type)
+df_test$Customer.Type<-as.factor(df_test$Customer.Type)
+
+df_train$Type.of.Travel<-as.factor(df_train$Type.of.Travel)
+df_test$Type.of.Travel<-as.factor(df_test$Type.of.Travel)
+
+df_train$Class<-as.factor(df_train$Class)
+df_test$Class<-as.factor(df_test$Class)
+
+df_train$satisfaction<-as.factor(df_train$satisfaction)
+df_test$satisfaction<-as.factor(df_test$satisfaction)
+```
+
+```{r}
+glimpse(df_train)
+```
+
+Podemos observar que el ID y la columna X no nos otorgan información relevante para el análisis, por lo tanto, las eliminamos:
+
+```{r,echo=FALSE}
+df_train<-df_train %>% dplyr:: select (-id)
+df_test<-df_test %>% dplyr:: select (-id)
+
+df_train<-df_train %>% dplyr:: select (-X)
+df_test<-df_test %>% dplyr:: select (-X)
+
+```
+
+```{r,fig.width=7,fig.height=3}
+plot_intro(df_train)
+```
+
+Ahora se completan las observaciones que faltan. Esto es muy importante para poder trabajar correctamente los datos.
+
+```{r}
+# Valores perdidos
+df_train <- df_train[complete.cases(df_train),]
+df_test <- df_test[complete.cases(df_test),]
+```
+
+```{r}
+plot_intro(df_train)
+plot_intro(df_test)
+```
+
+```{r}
+plot_correlation(df_train)
+```
+
+Por otro lado, la tabla de correlación es clave para la preparación del modelo, ya que cuantifica que tanto se relacionan las distintas variables con la variable dependiente satisfaction).
+
+```{r}
+variables_numericas<-df_train[,sapply(df_train,is.numeric)] #selecciona las columnas numericas
+matriz_correlacion <- cor(variables_numericas, as.numeric(df_train$satisfaction))
+matriz_correlacion
+```
+
+Ahora, para ver si existen outliers, dada la naturaleza de las variables, solo se estudiaran las asociadas a los tiempos de delay:
+
+```{r}
+boxplot(df_train$Departure.Delay.in.Minutes,ylab="Tiempo de delay en la salida en minutos")
+boxplot(df_train$Arrival.Delay.in.Minutes,ylab="Tiempo de delay en la llegada en minutos")
+```
+
+De esto se infiere que, si bien se observan outliers, dentro del contexto del problema estarían justificados dada la naturaleza del servicio y de los vuelos, además, al analizar dichos datos con valores muy grandes, podemos notar que son coincidentes un largo delay en la salida del vuelo con un largo tiempo de atraso en la llegada, confirmando el supuesto de que simplemente el vuelo se atrasó muchas horas.
+
+```{r}
+ggplot(df_train, aes(x=Class,fill=satisfaction))+
+geom_bar(position = 'fill')+theme_bw()+
+scale_x_discrete(label=function(x) str_wrap(x,width=10))
+
+ggplot(df_train, aes(x=Customer.Type,fill=satisfaction))+
+geom_bar(position = 'fill')+theme_bw()+
+scale_x_discrete(label=function(x) str_wrap(x,width=10))
+
+ggplot(df_train, aes(x=Type.of.Travel,fill=satisfaction))+
+geom_bar(position = 'fill')+theme_bw()+
+scale_x_discrete(label=function(x) str_wrap(x,width=10))
+
+ggplot(df_train, aes(x=Gender,fill=satisfaction))+
+geom_bar(position = 'fill')+theme_bw()+
+scale_x_discrete(label=function(x) str_wrap(x,width=10))
+```
+
+\*\*Gender-\>asociarlo a la tabla de correlacion (no importa:))
+
+Dada la naturaleza de la variable que queremos obtener, utilizaremos las siguientes regresiones para crear el modelo buscado
+
+# Métodos supervisados
+
+## 1. Modelo Regresión Logística
+
+```{r}
+attach(df_train)
+```
+
+```{r}
+glm.fit<-glm(satisfaction ~ .-Gender, family=binomial, data=df_train)
+summary(glm.fit)
+```
+
+Notamos que, sin considerar el género, todas las variables son significativas para el modelo, sin embargo, la locación de la puerta y el servicio de comida y bebidas serían menos importantes.
+
+```{r}
+pred_logistic<-predict(glm.fit,df_test,type="response") #matriz de predicciones
+y_pred = rep("neutral or dissatisfied", length(pred_logistic))
+y_pred[pred_logistic > 0.50678] = "satisfied"
+y_pred<-as.factor(y_pred)
+confusionMatrix(y_pred, df_test$satisfaction, positive = "satisfied")
+```
+
+```{r}
+roc_obj<-roc(df_test$satisfaction,pred_logistic)
+plot(roc_obj)
+auc(roc_obj) #para el area bajo la curva
+```
+
+De este gráfico podemos inferir que el modelo entregaría buenos resultados al tener una gran área bajo la curva ROC, significando que se tiene una alta sensitividad y especificidad, siendo aun mayor esta última.
+
+```{r}
+coords(roc_obj,"best","threshold")
+```
+
+Obteniendo así el umbral óptimo.
+
+## 2. LDA
+
+```{r}
+mod_lda<-lda(satisfaction~.-Gender , data=df_train)
+mod_lda
+```
+
+```{r}
+predicciones_lda<-predict(mod_lda, newdata=df_test)
+confusionMatrix(table(df_test$satisfaction,predicciones_lda$class, dnn=c("Clase real", "Clase predicha")))
+```
+
+## 3. QDA
+
+```{r}
+mod_qda<-qda(satisfaction~.-Gender, data=df_train)
+mod_qda
+```
+
+```{r}
+predicciones_qda<-predict(mod_qda, newdata=df_test)
+confusionMatrix(table(df_test$satisfaction,predicciones_qda$class, dnn=c("Clase real", "Clase predicha")))
+```
+
+## 4. KNN
+
+```{r}
+train_knn = df_train %>% dplyr::select(-c("satisfaction","Gender","Customer.Type","Class","Type.of.Travel"))
+test_knn = df_test %>% dplyr::select(-c("satisfaction","Gender","Customer.Type","Class","Type.of.Travel"))
+```
+
+```{r}
+### KNN iterativo ----
+overall.accuracy = c()
+for (i in 1:15){
+set.seed(1)
+knn_pred=knn(train_knn,test_knn,df_train$satisfaction,k=i)
+values = confusionMatrix(table(knn_pred,df_test$satisfaction))
+overall = values$overall
+overall.accuracy = append(overall.accuracy , overall["Accuracy"])
+}
+acc = data.frame(k=1:15, accuracy = overall.accuracy)
+ggplot(acc) + aes(x = k, y = accuracy) +geom_line(size = 0.5, colour = "#112446") +  theme_minimal() + geom_vline(xintercept = 11, color = "red")
+```
+
+Observando que se puede lograr una mayor precisión en el vecino 11.
+
+```{r}
+### Matriz de confusión ----
+
+knn.pred=knn(train_knn,test_knn,df_train$satisfaction,k=11)
+confusionMatrix(table(knn.pred,df_test$satisfaction))
+```
+
+## 5. Árbol de decisión
+
+```{r}
+tree.fit = rpart(formula=satisfaction~ .-Gender , data=df_train)
+plot(tree.fit)
+text(tree.fit, pretty=10)
+```
+
+```{r}
+
+### Matriz de confusión ----
+
+tree_pred=predict(tree.fit, df_test , type ="class")
+confusionMatrix(table(tree_pred,df_test$satisfaction))
+```
+
+## 6. SVM
+
+```{r}
+df_train_svm<-df_train %>% dplyr:: select (-Gender,-Customer.Type,-Type.of.Travel,-Class)
+df_test_svm<-df_test %>% dplyr:: select (-Gender,-Customer.Type,-Type.of.Travel,-Class)
+```
+
+```{r}
+df_train_svm[-19]=scale(df_train_svm[-19])
+df_test_svm[-19]=scale(df_test_svm[-19])
+```
+
+```{r}
+svm_fit <- svm(formula = satisfaction ~ ., data = df_train_svm, kernel = 'linear')
+
+summary(svm_fit)
+
+#
+```
+
+```{r}
+confusionMatrix(table(true=df_test$satisfaction,pred=predict(svm_fit, newdata=df_test_svm)))
+```
+
+```{r}
+svm_fit2 <- svm(formula = satisfaction ~ ., data = df_train_svm, kernel = 'radial')
+
+summary(svm_fit2)
+
+#plot(svm_fit2, df_train_svm)
+```
+
+```{r}
+confusionMatrix(table(true=df_test$satisfaction,pred=predict(svm_fit2, newdata=df_test_svm)))
+```
+
+# Métodos no supervisados
+
+## 7. Análisis de componentes principales
+
+```{r}
+variables_numericas_train<-df_train[,sapply(df_train,is.numeric)] #selecciona las columnas numericas
+variables_numericas_test<-df_test[,sapply(df_test,is.numeric)]
+```
+
+```{r}
+pca <- prcomp(variables_numericas_train, scale = TRUE)
+
+```
+
+```{r}
+#Varianza explicada por componente ----
+prop_varianza <- pca$sdev^2 / sum(pca$sdev^2)
+
+pca_var<-ggplot(data = data.frame(prop_varianza, pc = 1:length(prop_varianza)), aes(x = pc, y = prop_varianza)) + 
+  geom_col(width = 0.3) +  scale_y_continuous(limits = c(0,1)) +  theme_bw() +
+  labs(x = "Componente principal", y = "Prop. de varianza explicada")
+pca_var
+
+#Varianza explicada acumulada ----
+prop_varianza_acum <- cumsum(prop_varianza)
+
+pca_var_acum<-ggplot(data = data.frame(prop_varianza_acum, pc = 1:length(prop_varianza)), aes(x = pc, y = prop_varianza_acum, group = 1)) +
+  geom_point() +  geom_line() +  theme_bw() +  labs(x = "Componente principal", y = "Prop. varianza explicada acumulada")
+
+pca_var_acum
+
+biplot(pca)
+
+```
+
+```{r}
+library(factoextra)
+
+fviz_eig(pca)
+
+fviz_pca_biplot(pca, repel = TRUE,
+                col.var = "#D2691E", # color para las variables
+                col.ind = "#000000"  # colores de las estaciones
+)
+```
+
+### 
+
+```{r}
+library(corrplot)
+var <- get_pca_var(pca)
+corrplot(var$cos2, is.corr = FALSE)
+
+
+plot_prcomp(variables_numericas_train)
+```
+
+```{r}
+
+```
+
+## 8. K-Means
+
+```{r}
+df_kmeans=scale(variables_numericas_train)
+```
+
+```{r}
+k2 <- kmeans(df_kmeans, centers = 2, nstart = 25)
+k3 <- kmeans(df_kmeans, centers = 3, nstart = 25)
+k4 <- kmeans(df_kmeans, centers = 4, nstart = 25)
+k5 <- kmeans(df_kmeans, centers = 5, nstart = 25)
+
+# plots to compare
+p1 <- fviz_cluster(k2, geom = "point", data = df_kmeans) + ggtitle("k = 2")
+p2 <- fviz_cluster(k3, geom = "point",  data = df_kmeans) + ggtitle("k = 3")
+p3 <- fviz_cluster(k4, geom = "point",  data = df_kmeans) + ggtitle("k = 4")
+p4 <- fviz_cluster(k5, geom = "point",  data = df_kmeans) + ggtitle("k = 5")
+
+library(gridExtra)
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+
+```
+
+```{r}
+# Optimal K
+
+fviz_nbclust(df_kmeans, kmeans, method = "silhouette", k.max = 10)
+
+```
+
+```{r}
+fviz_nbclust(df_kmeans, kmeans, method = "wss", k.max = 10)
+```
+
+```{r}
+fviz_nbclust(df_kmeans, kmeans, "gap_stat", k.max = 10)
+```
+
+```{r}
+fviz_eig(prcomp(df_kmeans, scale = T))
+```
+
+## 9. Agrupamiento jerárquico
+
+```{r}
+## Method 1
+# Dissimilarity matrix
+d <- dist(df_kmeans, method = "euclidean")
+
+# Hierarchical clustering using Complete Linkage
+hc1 <- hclust(d, method = "complete" )
+
+# Plot the obtained dendrogram
+plot(hc1, cex = 0.6, hang = -1)
+```
+
+```{r}
+# Prunning
+
+# Ward's method
+hc5 <- hclust(d, method = "ward.D2" )
+
+# Cut tree into 4 groups
+sub_grp <- cutree(hc5, k = 2)
+
+# Number of members in each cluster
+table(sub_grp)
+
+#df_kmeans %>%
+  #mutate(cluster = sub_grp) %>%
+  #head
+
+plot(hc5, cex = 0.6)
+rect.hclust(hc5, k = 2, border = 2:5)
+```
+
+```{r}
+fviz_nbclust(df_kmeans, FUN = hcut, method = "wss")
+```
+
+```{r}
+
+fviz_nbclust(df_kmeans, FUN = hcut, method = "silhouette")
+```
+
+```{r}
+gap_stat <- clusGap(df_kmeans, FUN = hcut, nstart = 25, K.max = 10, B = 50)
+fviz_gap_stat(gap_stat)
+```
+
+## 10. Redes neuronales
+
+```{r}
+library(readr)
+library(tidyverse)
+library(DataExplorer)
+library(rsample)
+library(parsnip)
+library(recipes)
+library(workflows)
+library(yardstick)
+library(caret)
+library(tensorflow)
+library(keras)
+library(reticulate)
+library(nnet)
+
+
+```
+
+```{r}
+library(neuralnet)
+concrete_model <- neuralnet(satisfaction ~ Age + Flight.Distance + Inflight.wifi.service + Departure.Arrival.time.convenient+Ease.of.Online.booking+Gate.location+Food.and.drink+Online.boarding+Seat.comfort+Inflight.entertainment+On.board.service+Leg.room.service+Baggage.handling+Checkin.service+Inflight.service+Cleanliness+Departure.Delay.in.Minutes+Arrival.Delay.in.Minutes,data = df_train)
+plot(concrete_model, rep="best")
+```
+
+```{r}
+# Convertir las clases reales y predichas en factores con los niveles correctos
+actual_classes <- factor(actual_classes, levels = c("Satisfied", "Neutral or Dissatisfied"))
+predicted_classes <- factor(predicted_classes, levels = c("Satisfied", "Neutral or Dissatisfied"))
+
+# Asignar los valores correctos a los niveles de las clases
+levels(actual_classes) <- c(1, 0)
+levels(predicted_classes) <- c(1, 0)
+
+# Crear la matriz de confusión
+confusion_matrix <- table(actual_classes, predicted_classes)
+
+confusion_matrix
+
+```
+
+```{r}
+# Suponiendo que tienes los datos de prueba almacenados en un objeto llamado df_test
+predicted_output <- compute(concrete_model, df_test[, c("Age", "Flight.Distance", "Inflight.wifi.service", "Departure.Arrival.time.convenient", "Ease.of.Online.booking", "Gate.location", "Food.and.drink", "Online.boarding", "Seat.comfort", "Inflight.entertainment", "On.board.service", "Leg.room.service", "Baggage.handling", "Checkin.service", "Inflight.service", "Cleanliness", "Departure.Delay.in.Minutes", "Arrival.Delay.in.Minutes")])
+predicted_values <- predicted_output$net.result
+
+# Suponiendo que 'satisfaction' es la columna que contiene las clases reales en 'df_test'
+actual_classes <- df_test$satisfaction
+
+# Redondear las predicciones a las clases correspondientes (ejemplo: 1, 2, 3)
+predicted_classes <- round(predicted_values)
+
+# Asegurarse de que 'actual_classes' tenga la misma longitud que 'predicted_classes'
+actual_classes <- actual_classes[1:length(predicted_classes)]
+
+# Crear la matriz de confusión
+confusion_matrix <- table(actual_classes, predicted_classes)
+
+confusion_matrix
+```
+
+```{r}
+length(actual_classes)
+length(predicted_classes)
+```
+
+```{r}
+
+```
+
+``` {library(caret)}
+colnames(df_train)
+# Convert categorical variables to dummy variables
+dummy_model <- dummyVars(satisfaction ~ . , data = df_train)
+df_train_processed <- predict(dummy_model, newdata = df_train)
+
+# Train the neural network model
+concrete_model <- neuralnet(Satisfaction ~ ., data = df_train)
+plot(concrete_model, rep = "best")
+```
+
+```{r}
+
+```
+
+```{r}
+# Logistic regression
+
+lr_mod <- logistic_reg() %>% 
+  set_engine("glm")
+
+credit_recipe <- recipe(satisfaction ~ ., data = df_train) %>% 
+  step_dummy(all_factor_predictors())
+
+log_wflow <- workflow() %>% 
+  add_model(lr_mod) %>% 
+  add_recipe(credit_recipe)
+
+credit_fit <- log_wflow %>% 
+  fit(data = df_train)
+
+credit_fit %>% extract_fit_parsnip() %>% tidy()
+
+predictions_class <- credit_fit %>%
+  predict( new_data =  df_test, type = "class")
+
+predictions_prob <- credit_fit %>%
+  predict( new_data =  df_test, type = "prob")
+
+credits_res <- df_test %>% 
+   subset(select = satisfaction) %>% 
+  bind_cols(predictions_class, predictions_prob)
+```
+
+```{r}
+set.seed(1)
+nnet_mod <-
+  mlp(
+    hidden_units = 2,
+    epochs = 2,
+    penalty = 0.2
+  ) %>%
+  set_mode("classification") %>% 
+  set_engine("nnet", verbose = 0) 
+
+```
+
+```{r}
+nnet_wflow <-
+  workflow() %>%
+  add_recipe(credit_recipe) %>% 
+  add_model(nnet_mod)  
+```
+
+```{r}
+nnet_fit <- nnet_wflow %>% 
+  fit( data = df_train)
+```
+
+```{r}
+nnet_res <- df_test %>% 
+  subset(select = satisfaction) %>% 
+  bind_cols(nnet_fit %>% predict(new_data = df_test)) %>% 
+  bind_cols(nnet_fit %>% predict(new_data = df_test, type = "prob"))
+```
+
+```{r}
+
+conf_mat(nnet_res, satisfaction, .pred_class)
+
+```
+
+## 11. Redes neuronales convolucionales
+
+```{r}
+library(reticulate)
+
+library(tensorflow)
+#use_python(python = 'C:/Python/Python310/')
+use_condaenv("r-reticulate")
+#install_tensorflow(envname = "r-reticulate")
+#install_keras(envname = "r-reticulate")
+tf$constant("Hello Tensorflow!")
+
+```
+
+```{r}
+library(data.table)
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(keras)
+```
+
+```{r}
+max_features <- 5000
+maxlen <- 400
+batch_size <- 32
+embedding_dims <- 50
+filters <- 250
+kernel_size <- 3
+hidden_dims <- 250
+epochs <- 10
+```
+
+```{r}
+model <- keras_model_sequential()
+
+model %>% 
+  layer_embedding(max_features, embedding_dims, input_length = maxlen) %>%
+  layer_dropout(0.2) %>%
+  
+model %>%
+layer_dense(units = 64, activation = "relu", input_shape = c(10)) %>%
+layer_dropout(rate = 0.2) %>%
+layer_dense(units = 32, activation = "relu") %>%
+layer_batch_normalization() %>%
+layer_dense(units = 1, activation = "sigmoid")  
+
+# Compile model
+model %>% compile(
+loss = "binary_crossentropy",
+optimizer = "adam",
+metrics = c("accuracy")
+)
+
+```
+
+```{r}
+# Data Preparation --------------------------------------------------------
+
+
+imdb <- dataset_imdb(num_words = max_features)
+
+x_train <- imdb$train$x %>%
+  pad_sequences(maxlen = maxlen)
+x_test <- imdb$test$x %>%
+  pad_sequences(maxlen = maxlen)
+```
+
+```{r}
+# Training ----------------------------------------------------------------
+
+history <- model %>%
+  fit(
+    df_train, imdb$train$y,
+    batch_size = batch_size,
+    epochs = epochs,
+    validation_data = list(df_test, imdb$test$y)
+  )
+
+res <- model %>% evaluate (df_test, imdb$test$y)
+```
